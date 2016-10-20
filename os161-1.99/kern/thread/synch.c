@@ -305,8 +305,6 @@ cv_wait(struct cv *cv, struct lock *lock)
         KASSERT(cv != NULL);
         KASSERT(lock != NULL);
         
-        KASSERT(lock->owner == curthread);
-        
         KASSERT(curthread->t_in_interrupt == false);
         
         // release the mutex
@@ -327,8 +325,7 @@ cv_signal(struct cv *cv, struct lock *lock)
 {
         KASSERT(cv != NULL);
         KASSERT(lock != NULL);
-        
-        KASSERT(lock->owner == curthread);
+    
         KASSERT(curthread->t_in_interrupt == false);
         
         wchan_wakeone(cv->cv_wchan);
@@ -339,8 +336,7 @@ cv_broadcast(struct cv *cv, struct lock *lock)
 {
         KASSERT(cv != NULL);
         KASSERT(lock != NULL);
-        
-        KASSERT(lock->owner == curthread);
+    
         
         wchan_wakeall(cv->cv_wchan);
         
