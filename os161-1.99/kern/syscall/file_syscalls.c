@@ -27,7 +27,7 @@ sys_write(int fdesc,userptr_t ubuf,unsigned int nbytes,int *retval)
   struct uio u;
   int res;
 
-  DEBUG(DB_SYSCALL,"Syscall: write(%d,%x,%d)\n",fdesc,(unsigned int)ubuf,nbytes);
+  //DEBUG(DB_SYSCALL,"Syscall: write(%d,%x,%d)\n",fdesc,(unsigned int)ubuf,nbytes);
   
   /* only stdout and stderr writes are currently implemented */
   if (!((fdesc==STDOUT_FILENO)||(fdesc==STDERR_FILENO))) {

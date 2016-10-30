@@ -33,6 +33,7 @@
 #ifdef UW
 #include <lib.h>
 #endif
+#include "opt-A2.h"
 
 #define ARRAYS_CHECKED
 
@@ -41,6 +42,7 @@
 #else
 #define ARRAYASSERT(x) ((void)(x))
 #endif
+
 
 /*
  * Base array type (resizeable array of void pointers) and operations.
@@ -63,8 +65,8 @@
  */
 
 struct array {
-	void **v;
-	unsigned num, max;
+    void **v;
+    unsigned num, max;
 };
 
 struct array *array_create(void);
@@ -76,6 +78,7 @@ void *array_get(const struct array *, unsigned index);
 void array_set(const struct array *, unsigned index, void *val);
 int array_setsize(struct array *, unsigned num);
 int array_add(struct array *, void *val, unsigned *index_ret);
+int array_fill(struct array *, void *val, unsigned *index_ret);
 void array_remove(struct array *, unsigned index);
 
 /*
@@ -89,41 +92,68 @@ void array_remove(struct array *, unsigned index);
 ARRAYINLINE unsigned
 array_num(const struct array *a)
 {
-	return a->num;
+    return a->num;
 }
 
 ARRAYINLINE void *
 array_get(const struct array *a, unsigned index)
 {
-	ARRAYASSERT(index < a->num);
-	return a->v[index];
+    ARRAYASSERT(index < a->num);
+    return a->v[index];
 }
 
 ARRAYINLINE void
 array_set(const struct array *a, unsigned index, void *val)
 {
-	ARRAYASSERT(index < a->num);
-	a->v[index] = val;
+    ARRAYASSERT(index < a->num);
+    a->v[index] = val;
 }
 
 ARRAYINLINE int
 array_add(struct array *a, void *val, unsigned *index_ret)
 {
-	unsigned index;
-	int ret;
-
-	index = a->num;
-	ret = array_setsize(a, index+1);
-	if (ret) {
-		return ret;
-	}
-	a->v[index] = val;
-	if (index_ret != NULL) {
-		*index_ret = index;
-	}
-	return 0;
+    unsigned index;
+    int ret;
+    
+    index = a->num;
+    ret = array_setsize(a, index+1);
+    if (ret) {
+        return ret;
+    }
+    a->v[index] = val;
+    if (index_ret != NULL) {
+        *index_ret = index;
+    }
+    return 0;
 }
-
+#if OPT_A2
+ARRAYINLINE int
+array_fill(struct array *a, void *val, unsigned *index_ret)
+{
+    unsigned index;
+    
+    for (index = 0; index < a->num; index++){
+        if (a->v[index] == NULL){
+            a->v[index] = val;
+            *index_ret = index;
+            return 0;
+        }
+    }
+    
+    // no available slot
+    int ret;
+    index = a->num;
+    
+    ret = array_setsize(a, index+1);
+    if (ret) {
+        return ret;
+    }
+    a->v[index] = val;
+    *index_ret = index;
+    
+    return 0;
+}
+#endif
 /*
  * Bits for declaring and defining typed arrays.
  *
@@ -141,7 +171,7 @@ array_add(struct array *a, void *val, unsigned *index_ret)
  * in array.c.
  *
  * Example usage in e.g. item.h of some game:
- * 
+ *
  * DECLARRAY_BYTYPE(stringarray, char);
  * DECLARRAY(potion);
  * DECLARRAY(sword);
@@ -164,87 +194,94 @@ array_add(struct array *a, void *val, unsigned *index_ret)
  */
 
 #define DECLARRAY_BYTYPE(ARRAY, T) \
-	struct ARRAY {						\
-		struct array arr;				\
-	};							\
-								\
-	struct ARRAY *ARRAY##_create(void);			\
-	void ARRAY##_destroy(struct ARRAY *a);			\
-	void ARRAY##_init(struct ARRAY *a);			\
-	void ARRAY##_cleanup(struct ARRAY *a);			\
-	unsigned ARRAY##_num(const struct ARRAY *a);		\
-	T *ARRAY##_get(const struct ARRAY *a, unsigned index);	\
-	void ARRAY##_set(struct ARRAY *a, unsigned index, T *val); \
-	int ARRAY##_setsize(struct ARRAY *a, unsigned num);	\
-	int ARRAY##_add(struct ARRAY *a, T *val, unsigned *index_ret); \
-	void ARRAY##_remove(struct ARRAY *a, unsigned index)
+struct ARRAY {						\
+struct array arr;				\
+};							\
+\
+struct ARRAY *ARRAY##_create(void);			\
+void ARRAY##_destroy(struct ARRAY *a);			\
+void ARRAY##_init(struct ARRAY *a);			\
+void ARRAY##_cleanup(struct ARRAY *a);			\
+unsigned ARRAY##_num(const struct ARRAY *a);		\
+T *ARRAY##_get(const struct ARRAY *a, unsigned index);	\
+void ARRAY##_set(struct ARRAY *a, unsigned index, T *val); \
+int ARRAY##_setsize(struct ARRAY *a, unsigned num);	\
+int ARRAY##_add(struct ARRAY *a, T *val, unsigned *index_ret); \
+int ARRAY##_fill(struct ARRAY *a, T *val, unsigned *index_ret); \
+void ARRAY##_remove(struct ARRAY *a, unsigned index)
 
 #define DEFARRAY_BYTYPE(ARRAY, T, INLINE) \
-	INLINE struct ARRAY *					\
-	ARRAY##_create(void)					\
-	{							\
-		struct ARRAY *a = kmalloc(sizeof(*a));		\
-		if (a == NULL) {				\
-			return NULL;				\
-		}						\
-		array_init(&a->arr);				\
-		return a;					\
-	}							\
-								\
-	INLINE void						\
-	ARRAY##_destroy(struct ARRAY *a)			\
-	{							\
-		array_cleanup(&a->arr);				\
-		kfree(a);					\
-	}							\
-								\
-	INLINE void						\
-	ARRAY##_init(struct ARRAY *a)				\
-	{							\
-		array_init(&a->arr);				\
-	}							\
-								\
-	INLINE void						\
-	ARRAY##_cleanup(struct ARRAY *a)			\
-	{							\
-		array_cleanup(&a->arr);				\
-	}							\
-								\
-	INLINE unsigned						\
-	ARRAY##_num(const struct ARRAY *a)			\
-	{							\
-		return array_num(&a->arr);			\
-	}							\
-								\
-	INLINE T *						\
-	ARRAY##_get(const struct ARRAY *a, unsigned index)	\
-	{							\
-		return (T *)array_get(&a->arr, index);		\
-	}							\
-								\
-	INLINE void						\
-	ARRAY##_set(struct ARRAY *a, unsigned index, T *val)	\
-	{							\
-		array_set(&a->arr, index, (void *)val);		\
-	}							\
-								\
-	INLINE int						\
-	ARRAY##_setsize(struct ARRAY *a, unsigned num)		\
-	{							\
-		return array_setsize(&a->arr, num);		\
-	}							\
-								\
-	INLINE int						\
-	ARRAY##_add(struct ARRAY *a, T *val, unsigned *index_ret) \
-	{							\
-		return array_add(&a->arr, (void *)val, index_ret); \
-	}							\
-								\
-	INLINE void						\
-	ARRAY##_remove(struct ARRAY *a, unsigned index)		\
-	{							\
-		return array_remove(&a->arr, index);		\
-	}
+INLINE struct ARRAY *					\
+ARRAY##_create(void)					\
+{							\
+struct ARRAY *a = kmalloc(sizeof(*a));		\
+if (a == NULL) {				\
+return NULL;				\
+}						\
+array_init(&a->arr);				\
+return a;					\
+}							\
+\
+INLINE void						\
+ARRAY##_destroy(struct ARRAY *a)			\
+{							\
+array_cleanup(&a->arr);				\
+kfree(a);					\
+}							\
+\
+INLINE void						\
+ARRAY##_init(struct ARRAY *a)				\
+{							\
+array_init(&a->arr);				\
+}							\
+\
+INLINE void						\
+ARRAY##_cleanup(struct ARRAY *a)			\
+{							\
+array_cleanup(&a->arr);				\
+}							\
+\
+INLINE unsigned						\
+ARRAY##_num(const struct ARRAY *a)			\
+{							\
+return array_num(&a->arr);			\
+}							\
+\
+INLINE T *						\
+ARRAY##_get(const struct ARRAY *a, unsigned index)	\
+{							\
+return (T *)array_get(&a->arr, index);		\
+}							\
+\
+INLINE void						\
+ARRAY##_set(struct ARRAY *a, unsigned index, T *val)	\
+{							\
+array_set(&a->arr, index, (void *)val);		\
+}							\
+\
+INLINE int						\
+ARRAY##_setsize(struct ARRAY *a, unsigned num)		\
+{							\
+return array_setsize(&a->arr, num);		\
+}							\
+\
+INLINE int						\
+ARRAY##_add(struct ARRAY *a, T *val, unsigned *index_ret) \
+{							\
+return array_add(&a->arr, (void *)val, index_ret); \
+}							\
+\
+INLINE int						\
+ARRAY##_fill(struct ARRAY *a, T *val, unsigned *index_ret) \
+{							\
+return array_fill(&a->arr, (void *)val, index_ret); \
+}							\
+\
+INLINE void						\
+ARRAY##_remove(struct ARRAY *a, unsigned index)		\
+{							\
+return array_remove(&a->arr, index);		\
+}
 
 #define DECLARRAY(T) DECLARRAY_BYTYPE(T##array, struct T)
 #define DEFARRAY(T, INLINE) DEFARRAY_BYTYPE(T##array, struct T, INLINE)

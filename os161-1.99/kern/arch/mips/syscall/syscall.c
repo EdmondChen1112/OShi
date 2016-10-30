@@ -31,10 +31,14 @@
 #include <kern/errno.h>
 #include <kern/syscall.h>
 #include <lib.h>
+#include <addrspace.h>
+#include <proc.h>
 #include <mips/trapframe.h>
 #include <thread.h>
 #include <current.h>
 #include <syscall.h>
+#include "opt-A2.h" // required for ASST2
+
 
 
 /*
@@ -78,94 +82,99 @@
 void
 syscall(struct trapframe *tf)
 {
-	int callno;
-	int32_t retval;
-	int err;
-
-	KASSERT(curthread != NULL);
-	KASSERT(curthread->t_curspl == 0);
-	KASSERT(curthread->t_iplhigh_count == 0);
-
-	callno = tf->tf_v0;
-
-	/*
-	 * Initialize retval to 0. Many of the system calls don't
-	 * really return a value, just 0 for success and -1 on
-	 * error. Since retval is the value returned on success,
-	 * initialize it to 0 by default; thus it's not necessary to
-	 * deal with it except for calls that return other values, 
-	 * like write.
-	 */
-
-	retval = 0;
-
-	switch (callno) {
-	    case SYS_reboot:
-		err = sys_reboot(tf->tf_a0);
-		break;
-
-	    case SYS___time:
-		err = sys___time((userptr_t)tf->tf_a0,
-				 (userptr_t)tf->tf_a1);
-		break;
+        int callno;
+        int32_t retval;
+        int err;
+        
+        KASSERT(curthread != NULL);
+        KASSERT(curthread->t_curspl == 0);
+        KASSERT(curthread->t_iplhigh_count == 0);
+        
+        callno = tf->tf_v0;
+        
+        /*
+         * Initialize retval to 0. Many of the system calls don't
+         * really return a value, just 0 for success and -1 on
+         * error. Since retval is the value returned on success,
+         * initialize it to 0 by default; thus it's not necessary to
+         * deal with it except for calls that return other values,
+         * like write.
+         */
+        
+        retval = 0;
+        
+        switch (callno) {
+                case SYS_reboot:
+                        err = sys_reboot(tf->tf_a0);
+                        break;
+                        
+                case SYS___time:
+                        err = sys___time((userptr_t)tf->tf_a0,
+                                         (userptr_t)tf->tf_a1);
+                        break;
 #ifdef UW
-	case SYS_write:
-	  err = sys_write((int)tf->tf_a0,
-			  (userptr_t)tf->tf_a1,
-			  (int)tf->tf_a2,
-			  (int *)(&retval));
-	  break;
-	case SYS__exit:
-	  sys__exit((int)tf->tf_a0);
-	  /* sys__exit does not return, execution should not get here */
-	  panic("unexpected return from sys__exit");
-	  break;
-	case SYS_getpid:
-	  err = sys_getpid((pid_t *)&retval);
-	  break;
-	case SYS_waitpid:
-	  err = sys_waitpid((pid_t)tf->tf_a0,
-			    (userptr_t)tf->tf_a1,
-			    (int)tf->tf_a2,
-			    (pid_t *)&retval);
-	  break;
+                case SYS_write:
+                        err = sys_write((int)tf->tf_a0,
+                                        (userptr_t)tf->tf_a1,
+                                        (int)tf->tf_a2,
+                                        (int *)(&retval));
+                        break;
+                case SYS__exit:
+                        sys__exit((int)tf->tf_a0);
+                        /* sys__exit does not return, execution should not get here */
+                        panic("unexpected return from sys__exit");
+                        break;
+                case SYS_getpid:
+                        err = sys_getpid((pid_t *)&retval);
+                        break;
+                case SYS_waitpid:
+                        err = sys_waitpid((pid_t)tf->tf_a0,
+                                          (userptr_t)tf->tf_a1,
+                                          (int)tf->tf_a2,
+                                          (pid_t *)&retval);
+                        break;
+#if OPT_A2
+                case SYS_fork:
+                        err = sys_fork(tf, (pid_t *)&retval);
+                break;
+#endif // OPT_A2
 #endif // UW
-
-	    /* Add stuff here */
- 
-	default:
-	  kprintf("Unknown syscall %d\n", callno);
-	  err = ENOSYS;
-	  break;
-	}
-
-
-	if (err) {
-		/*
-		 * Return the error code. This gets converted at
-		 * userlevel to a return value of -1 and the error
-		 * code in errno.
-		 */
-		tf->tf_v0 = err;
-		tf->tf_a3 = 1;      /* signal an error */
-	}
-	else {
-		/* Success. */
-		tf->tf_v0 = retval;
-		tf->tf_a3 = 0;      /* signal no error */
-	}
-	
-	/*
-	 * Now, advance the program counter, to avoid restarting
-	 * the syscall over and over again.
-	 */
-	
-	tf->tf_epc += 4;
-
-	/* Make sure the syscall code didn't forget to lower spl */
-	KASSERT(curthread->t_curspl == 0);
-	/* ...or leak any spinlocks */
-	KASSERT(curthread->t_iplhigh_count == 0);
+                        
+                        /* Add stuff here */
+                        
+                default:
+                        kprintf("Unknown syscall %d\n", callno);
+                        err = ENOSYS;
+                        break;
+        }
+        
+        
+        if (err) {
+                /*
+                 * Return the error code. This gets converted at
+                 * userlevel to a return value of -1 and the error
+                 * code in errno.
+                 */
+                tf->tf_v0 = err;
+                tf->tf_a3 = 1;      /* signal an error */
+        }
+        else {
+                /* Success. */
+                tf->tf_v0 = retval;
+                tf->tf_a3 = 0;      /* signal no error */
+        }
+        
+        /*
+         * Now, advance the program counter, to avoid restarting
+         * the syscall over and over again.
+         */
+        
+        tf->tf_epc += 4;
+        
+        /* Make sure the syscall code didn't forget to lower spl */
+        KASSERT(curthread->t_curspl == 0);
+        /* ...or leak any spinlocks */
+        KASSERT(curthread->t_iplhigh_count == 0);
 }
 
 /*
@@ -176,8 +185,47 @@ syscall(struct trapframe *tf)
  *
  * Thus, you can trash it and do things another way if you prefer.
  */
+#if OPT_A2
+/*
+ * Child thread needs to put the trapframe onto the stack and modify it so
+ * that it returns the current value (and executes the next instruction)
+ */
+void
+enter_forked_process(void *data1, unsigned long data2)
+{
+    (void)data2;
+    struct trapframe *childtf = ((void **)data1)[0];
+    struct addrspace *childas = ((void **)data1)[1];
+    KASSERT(childtf != NULL);
+    KASSERT(childas != NULL);
+    
+    /* It's necessary for the trap frame used here to be on the
+     * current thread's own stack.
+     */
+    struct trapframe stacktf = *childtf;
+    // don't need it anymore as long as copy the parent's tf to kernel stack
+    kfree(childtf);
+    
+    /* Switch to child as and activate it. */
+    curproc_setas(childas);
+    as_activate();
+    
+    stacktf.tf_v0 = 0;     // return value = 0 for child proc
+    stacktf.tf_a3 = 0;     // signal no error
+    /**
+     * Now, advance the program counter, to avoid restarting the syscall
+     * over and over again, and finally enter usermode.
+     */
+    stacktf.tf_epc += 4;
+    mips_usermode(&stacktf);
+    
+    /* mips_usermode() does not return */
+    panic("enter_forked_process: unexpected return from mips_usermode()");
+}
+#else
 void
 enter_forked_process(struct trapframe *tf)
 {
-	(void)tf;
+    (void)tf;
 }
+#endif
