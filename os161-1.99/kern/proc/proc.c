@@ -76,6 +76,57 @@ struct semaphore *no_proc_sem;
 #if OPT_A2
 static struct procarray procs;
 struct lock *ptable_lk;
+
+// some ultility functions of processes
+void
+detach_children_proc(struct proc *p)
+{
+    spinlock_acquire(&p->p_lock);
+    for (unsigned int i=0; i<procarray_num(&p->p_children); ++i)
+    {
+        struct proc *pd = procarray_get(&p->p_children, i);
+        KASSERT(pd != NULL);
+        pd->p_pproc = NULL;
+    }
+    spinlock_release(&p->p_lock);
+}
+
+
+bool
+if_procchild(struct proc *p, pid_t child_pid)
+{
+    struct proc *childproc = proc_get_by_pid(child_pid);
+    KASSERT(childproc != NULL);
+    
+    return (childproc->p_pproc == p);
+}
+
+struct proc *
+proc_get_by_pid(pid_t pid)
+{
+    unsigned i;
+    struct proc *pd = NULL;
+    lock_acquire(ptable_lk);
+    for (i=0; i<procarray_num(&procs); ++i)
+    {
+        pd = procarray_get(&procs, i);
+        if (pd->p_pid == pid)
+            break;
+    }
+    lock_release(ptable_lk);
+    
+    return pd;
+}
+
+int
+get_proc_count() {
+    int r = 0;
+    P(proc_count_mutex);
+    r = proc_count;
+    V(proc_count_mutex);
+    return proc_count;
+}
+
 #endif
 
 /*
@@ -128,7 +179,7 @@ proc_create(const char *name)
     }
     
     // assign pid to new proc
-    unsigned index;
+    unsigned int index;
     procarray_fill(&procs, proc, &index);
     proc->p_pid = index;
     
@@ -200,42 +251,6 @@ proc_destroy(struct proc *proc)
     
     kfree(proc->p_name);
     
-#if OPT_A2
-    // Detach proc's children processes.
-    detach_children_proc(proc);
-    
-    // Delete proc from its parent's children array.
-    struct proc *parent = proc->p_pproc;
-    if (parent != NULL)
-    {
-        spinlock_acquire(&parent->p_lock);
-        for (unsigned i = 0; i< procarray_num(&parent->p_children); i++){
-            struct proc *child = procarray_get(&procs, i);
-            if (child->p_pid == proc->p_pid){
-                procarray_remove(&parent->p_children, i);
-                break;
-            }
-        }
-        spinlock_release(&parent->p_lock);
-    }
-    
-    // Delete from process table
-    if (parent == NULL) {
-        // Clean up self-defined properties
-        lock_destroy(proc->p_waitpid_lk);
-        cv_destroy(proc->p_waitpid_cv);
-        
-        // Delete proc from process table
-        lock_acquire(ptable_lk);
-        procarray_set(&procs, proc->p_pid, NULL);
-        lock_release(ptable_lk);
-        kfree(proc);
-    }
-#else
-    kfree(proc);
-#endif
-    
-    
 #ifdef UW
     /* decrement the process count */
     /* note: kproc is not included in the process count, but proc_destroy
@@ -251,6 +266,41 @@ proc_destroy(struct proc *proc)
     V(proc_count_mutex);
 #endif // UW
     
+#if OPT_A2
+    
+    struct proc *parent = proc->p_pproc;
+    
+    // remove children
+    detach_children_proc(proc);
+    
+    /* If its parent exists, remove the pointer of this process from its parent
+     */
+    if (parent != NULL)
+    {
+        spinlock_acquire(&parent->p_lock);
+        for (unsigned i = 0; i< procarray_num(&parent->p_children); i++){
+            struct proc *child = procarray_get(&procs, i);
+            if (child->p_pid == proc->p_pid){
+                procarray_remove(&parent->p_children, i);
+                break;
+            }
+        }
+        spinlock_release(&parent->p_lock);
+    } else {
+        
+        // no parent so don't need synch primitive anymore
+        lock_destroy(proc->p_waitpid_lk);
+        cv_destroy(proc->p_waitpid_cv);
+        
+        // no parent we can reuse the pid and remove the reference from procarray
+        lock_acquire(ptable_lk);
+        procarray_set(&procs, proc->p_pid, NULL);
+        lock_release(ptable_lk);
+        kfree(proc);
+    }
+#else
+    kfree(proc);
+#endif
     
 }
 
@@ -260,17 +310,6 @@ proc_destroy(struct proc *proc)
 void
 proc_bootstrap(void)
 {
-    
-#if OPT_A2
-    procarray_init(&procs);
-    
-    ptable_lk = lock_create("ptable_lock");
-    if (ptable_lk == NULL) {
-        panic("could not create ptable_lk\n");
-    }
-    
-#endif
-    
     kproc = proc_create("[kernel]");
     if (kproc == NULL) {
         panic("proc_create for kproc failed\n");
@@ -287,6 +326,17 @@ proc_bootstrap(void)
     }
 #endif // UW
     
+    
+#if OPT_A2
+    
+    procarray_init(&procs);
+    
+    ptable_lk = lock_create("ptable_lock");
+    if (ptable_lk == NULL) {
+        panic("could not create ptable_lk\n");
+    }
+    
+#endif
 }
 
 /*
@@ -305,14 +355,6 @@ proc_create_runprogram(const char *name)
     if (proc == NULL) {
         return NULL;
     }
-    
-#if OPT_A2
-    int result = procarray_add(&procs, proc, NULL);
-    if (result){
-        // DEBUG(DB_SYSCALL, "procarray_add failed\n");
-        panic("procarray_add failed\n");
-    }
-#endif
     
 #ifdef UW
     /* open the console - this should always succeed */
@@ -357,6 +399,13 @@ proc_create_runprogram(const char *name)
     proc_count++;
     V(proc_count_mutex);
 #endif // UW
+    
+#if OPT_A2
+    int result = procarray_add(&procs, proc, NULL);
+    if (result){
+        panic("procarray_add failed\n");
+    }
+#endif
     
     return proc;
 }
@@ -451,48 +500,4 @@ curproc_setas(struct addrspace *newas)
     spinlock_release(&proc->p_lock);
     return oldas;
 }
-
-#if OPT_A2
-void 
-detach_children_proc(struct proc *p)
-{
-    spinlock_acquire(&p->p_lock);
-    for (unsigned i=0; i<procarray_num(&p->p_children); i++) 
-    {
-        struct proc *pd = procarray_get(&p->p_children, i);
-        KASSERT(pd != NULL);
-        pd->p_pproc = NULL;
-    }
-    spinlock_release(&p->p_lock);
-    return;
-}
-
-
-bool 
-if_procchild(struct proc *p, pid_t child_pid)
-{
-    struct proc *childproc = proc_get_by_pid(child_pid);
-    KASSERT(childproc != NULL);
-    
-    return (childproc->p_pproc == p);
-}
-
-struct proc * 
-proc_get_by_pid(pid_t pid)
-{
-    unsigned i;
-    struct proc *pd = NULL;
-    lock_acquire(ptable_lk);
-    for (i=0; i<procarray_num(&procs); ++i) 
-    {
-        pd = procarray_get(&procs, i);
-        if (pd->p_pid == pid)
-            break;
-    }
-    lock_release(ptable_lk);
-    
-    return pd;
-}
-
-#endif
 

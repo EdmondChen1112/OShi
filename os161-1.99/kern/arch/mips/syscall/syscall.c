@@ -185,30 +185,16 @@ syscall(struct trapframe *tf)
  *
  * Thus, you can trash it and do things another way if you prefer.
  */
-#if OPT_A2
-/*
- * Child thread needs to put the trapframe onto the stack and modify it so
- * that it returns the current value (and executes the next instruction)
- */
 void
-enter_forked_process(void *data1, unsigned long data2)
+enter_forked_process(struct trapframe *tf)
 {
-    (void)data2;
-    struct trapframe *childtf = ((void **)data1)[0];
-    struct addrspace *childas = ((void **)data1)[1];
-    KASSERT(childtf != NULL);
-    KASSERT(childas != NULL);
-    
+#if OPT_A2
     /* It's necessary for the trap frame used here to be on the
      * current thread's own stack.
      */
-    struct trapframe stacktf = *childtf;
+    struct trapframe stacktf = *tf;
     // don't need it anymore as long as copy the parent's tf to kernel stack
-    kfree(childtf);
-    
-    /* Switch to child as and activate it. */
-    curproc_setas(childas);
-    as_activate();
+    kfree(tf);
     
     stacktf.tf_v0 = 0;     // return value = 0 for child proc
     stacktf.tf_a3 = 0;     // signal no error
@@ -221,11 +207,8 @@ enter_forked_process(void *data1, unsigned long data2)
     
     /* mips_usermode() does not return */
     panic("enter_forked_process: unexpected return from mips_usermode()");
-}
 #else
-void
-enter_forked_process(struct trapframe *tf)
-{
-    (void)tf;
-}
+    (void) tf;
 #endif
+}
+

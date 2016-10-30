@@ -35,13 +35,14 @@
  *
  * Note: curproc is defined by <current.h>.
  */
-#include "opt-A2.h"
+
 #include <spinlock.h>
 #include <thread.h> /* required for struct threadarray */
-
+#include "opt-A2.h"
 struct addrspace;
 
 struct vnode;
+
 
 #ifdef UW
 struct semaphore;
@@ -49,6 +50,7 @@ struct semaphore;
 
 
 #if OPT_A2
+struct lock;
 #ifndef PROCINLINE
 #define PROCINLINE INLINE
 #endif
@@ -96,11 +98,13 @@ struct proc {
 
 
 #if OPT_A2
+int get_proc_count(void);
+struct proc *proc_get_by_pid(pid_t pid);
 void detach_children_proc(struct proc *p);
 bool if_procchild(struct proc *p, pid_t child_pid);
 struct proc *proc_get_by_pid(pid_t pid);
 
-struct lock;
+
 extern struct lock *ptable_lk;
 #endif
 
