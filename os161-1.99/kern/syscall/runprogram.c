@@ -43,6 +43,7 @@
 #include <vm.h>
 #include <vfs.h>
 #include <syscall.h>
+#include <copyinout.h>
 #include <test.h>
 
 /*
@@ -51,8 +52,21 @@
  *
  * Calls vfs_open on progname and thus may destroy it.
  */
-int
-runprogram(char *progname)
+
+vaddr_t pad_stackptr_by_n_1(vaddr_t sptr, int n);
+
+vaddr_t pad_stackptr_by_n_1(vaddr_t sptr, int n) {
+    int offset = sptr%n;
+    sptr-=sptr%n;
+    bzero((void *)sptr, offset);
+    return sptr;
+}
+
+#if OPT_A2
+int runprogram(char* progname, int argc, char** argv)
+#else
+int runprogram(char *progname)
+#endif
 {
 	struct addrspace *as;
 	struct vnode *v;
@@ -97,10 +111,49 @@ runprogram(char *progname)
 		return result;
 	}
 
+#if OPT_A2
+	vaddr_t argvptr;
+	int offset;
+
+	// copy argv to the stack of user address space
+    char** addr_ptr = kmalloc((argc+1)*sizeof(char*)); 
+    for (int i=argc-1; i>=0; --i){
+        stackptr-=strlen(argv[i])+1;
+        result = copyout(argv[i], (userptr_t)stackptr, strlen(argv[i])+1);   
+        if (result) {
+          return result;
+        }
+        addr_ptr[i] = (char*) stackptr;
+    }
+
+    /* Null terminated */
+    addr_ptr[argc] = NULL;
+    
+    offset = stackptr%4;
+    stackptr = pad_stackptr_by_n_1(stackptr, 4);
+
+    offset = (argc+1)*sizeof(char*);
+    stackptr-=offset;
+
+    result = copyout(addr_ptr, (userptr_t)stackptr, offset);     
+    if (result) {
+      return result;
+    }
+
+    kfree(addr_ptr);
+
+    argvptr = stackptr;
+
+    offset = stackptr%8;
+    stackptr = pad_stackptr_by_n_1(stackptr, 8);
+
+    enter_new_process(argc /*argc*/, (userptr_t)argvptr /*userspace addr of argv*/,
+         stackptr, entrypoint);
+#else
 	/* Warp to user mode. */
 	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
 			  stackptr, entrypoint);
-	
+#endif
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");
 	return EINVAL;

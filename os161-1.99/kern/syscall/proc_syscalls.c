@@ -10,6 +10,7 @@
 #include <mips/trapframe.h> //
 #include <current.h>
 #include <proc.h>
+#include <test.h>
 #include <synch.h>
 #include <thread.h>
 #include <addrspace.h>
@@ -243,6 +244,155 @@ void enter_forked_process_for_threadfork(void *data1, unsigned long data2) {
     as_activate();    
     
     enter_forked_process(childtf);
+}
+
+vaddr_t pad_stackptr_by_n(vaddr_t sptr, int n);
+
+vaddr_t pad_stackptr_by_n(vaddr_t sptr, int n) {
+    int offset = sptr%n;
+    sptr-=sptr%n;
+    bzero((void *)sptr, offset);
+    return sptr;
+}
+
+int
+sys_execv(userptr_t progname, userptr_t argv){
+    struct addrspace *as;
+    size_t path_len;
+    struct vnode *v; //an abstract representation of a file.
+    vaddr_t entrypoint, stackptr;    
+    int result;
+    vaddr_t argvptr;
+    int argc = 0; 
+    int offset;
+
+    char *kprogname = kmalloc(PATH_MAX);
+    if (kprogname == NULL)
+        return ENOMEM;
+
+    /* copy path */
+    result = copyinstr(progname, kprogname, PATH_MAX, &path_len);
+    if (result) {
+        return result;
+    }
+
+    char** argv_ptr_arr = (char**) argv;
+
+    userptr_t kptr = kmalloc(sizeof(userptr_t));
+    if (kptr == NULL) {
+        return ENOMEM;
+    }
+
+    /* count arguments */
+    while(argv_ptr_arr[argc] != NULL) ++argc;
+    if (argc > ARG_MAX) {
+        return E2BIG;
+    }
+
+    char** kargv_arr = kmalloc((argc + 1) * sizeof(char*)); // allocate memory of size of arguments
+    if (kargv_arr == NULL) {
+        return ENOMEM;
+    }
+
+    /* copy each argument to kernel */
+    for (int i = 0; i < argc; ++i) {
+        /* first copy in the pointer to the argument */
+        result = copyin((const_userptr_t)&(argv_ptr_arr[i]), &kptr, sizeof(userptr_t));
+        if (result){
+          return result;
+        }
+        kargv_arr[i] = kmalloc(PATH_MAX);
+        /* copy in the argument */
+        result = copyinstr((const_userptr_t)kptr, kargv_arr[i], PATH_MAX, &path_len);
+        if (result) {
+          return result;
+        }
+    }
+    
+    /* null terminated */
+    kargv_arr[argc] = NULL;                                       
+
+   
+    /* Open the file. */
+    result = vfs_open(kprogname, O_RDONLY, 0, &v); 
+    if (result) {
+      return result;
+    }
+    kfree(kprogname);
+    
+    /* Create a new address space. */
+    as = as_create();
+    if (as ==NULL) {
+        vfs_close(v);
+        return ENOMEM;
+    }
+
+    /* Switch to it and activate it. */
+    curproc_setas(as);
+    as_activate();
+
+    /* Load the executable. */
+    result = load_elf(v, &entrypoint);
+    if (result) {
+      /* p_addrspace will go away when curproc is destroyed */
+      vfs_close(v);
+      return result;
+    }
+
+    /* Done with the file now. */
+    vfs_close(v);
+
+    /* Define the user stack in the address space */
+    result = as_define_stack(curproc->p_addrspace, &stackptr);
+    if (result) {
+      return result;
+    }
+    
+    /* copy argv onto the stack of the new user address space */
+    char** addr_ptr_arr = kmalloc((argc+1)*sizeof(char*));
+    if (addr_ptr_arr == NULL) {
+        return ENOMEM;
+    }
+
+    for (int i = argc-1; i >= 0; --i) {
+        int tmp = strlen(kargv_arr[i])+1; // include the null terminator
+        stackptr-=tmp; // get space for this argument
+        result = copyout(kargv_arr[i], (userptr_t)stackptr, tmp); // write the argument to user stack
+        if (result) {
+          return result;
+        }
+        addr_ptr_arr[i] = (char*)stackptr; // save the pointer to this argumnet
+    }
+
+    kfree(kargv_arr);
+
+    /* null terminated */
+    addr_ptr_arr[argc] = NULL;
+
+    offset = stackptr % 4;
+    stackptr = pad_stackptr_by_n(stackptr, 4);
+
+    offset = (argc + 1) * sizeof(char*);
+    stackptr-=offset;
+    
+    result = copyout(addr_ptr_arr, (userptr_t)stackptr, offset);
+    if (result) {
+      return result;
+    }
+    kfree(addr_ptr_arr);
+
+    argvptr = stackptr;
+
+    offset = stackptr%8;
+    stackptr = pad_stackptr_by_n(stackptr, 8);
+
+    /* Warp to user mode. */
+    enter_new_process(argc /*argc*/, (userptr_t)argvptr /*userspace addr of argv*/,
+         stackptr, entrypoint);
+    
+    /* enter_new_process does not return. */
+    panic("enter_new_process returned\n");
+    return EINVAL;
 }
 #endif
 
